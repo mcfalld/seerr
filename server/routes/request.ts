@@ -37,8 +37,6 @@ import {
 } from '@server/routes/discover';
 import { Router } from 'express';
 
-export class ContentRatingRestrictionError extends Error {}
-
 const requestRoutes = Router();
 
 requestRoutes.get<Record<string, unknown>, RequestResultsResponse>(
@@ -376,70 +374,6 @@ requestRoutes.post<never, MediaRequest, MediaRequestBody>(
         });
       }
 
-      // Check parental controls before allowing the request
-      const limits = getUserContentRatingLimits(req.user);
-      if (limits) {
-        const tmdb = new TheMovieDb();
-
-        if (req.body.mediaType === MediaType.MOVIE) {
-          const movie = await tmdb.getMovie({ movieId: req.body.mediaId });
-
-          // Block adult movies
-          if (limits.blockAdult && movie.adult) {
-            throw new ContentRatingRestrictionError(
-              'This content is restricted by your parental control settings.'
-            );
-          }
-
-          // Check movie certification
-          if (limits.blockUnrated || limits.maxMovieRating) {
-            const cert = getMovieCertFromDetails(
-              movie.release_dates?.results ?? []
-            );
-
-            if (limits.blockUnrated && isUnrated(cert)) {
-              throw new ContentRatingRestrictionError(
-                'This content is restricted by your parental control settings (unrated content is blocked).'
-              );
-            }
-
-            if (
-              limits.maxMovieRating &&
-              cert &&
-              shouldFilterMovie(cert, limits.maxMovieRating)
-            ) {
-              throw new ContentRatingRestrictionError(
-                `This content is rated ${cert}, which exceeds your allowed rating of ${limits.maxMovieRating}.`
-              );
-            }
-          }
-        } else if (req.body.mediaType === MediaType.TV) {
-          if (limits.blockUnrated || limits.maxTvRating) {
-            const tvShow = await tmdb.getTvShow({ tvId: req.body.mediaId });
-            const usRating = tvShow.content_ratings?.results?.find(
-              (r) => r.iso_3166_1 === 'US'
-            );
-            const cert = usRating?.rating ?? '';
-
-            if (limits.blockUnrated && isUnrated(cert)) {
-              throw new ContentRatingRestrictionError(
-                'This content is restricted by your parental control settings (unrated content is blocked).'
-              );
-            }
-
-            if (
-              limits.maxTvRating &&
-              cert &&
-              shouldFilterTv(cert, limits.maxTvRating)
-            ) {
-              throw new ContentRatingRestrictionError(
-                `This content is rated ${cert}, which exceeds your allowed rating of ${limits.maxTvRating}.`
-              );
-            }
-          }
-        }
-      }
-
       const request = await MediaRequest.request(req.body, req.user);
 
       return res.status(201).json(request);
@@ -457,8 +391,6 @@ requestRoutes.post<never, MediaRequest, MediaRequestBody>(
         case NoSeasonsAvailableError:
           return next({ status: 202, message: error.message });
         case BlacklistedMediaError:
-          return next({ status: 403, message: error.message });
-        case ContentRatingRestrictionError:
           return next({ status: 403, message: error.message });
         default:
           return next({ status: 500, message: error.message });
