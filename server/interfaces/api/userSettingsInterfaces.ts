@@ -20,6 +20,13 @@ export interface UserSettingsGeneralResponse {
   watchlistSyncTv?: boolean;
 }
 
+export interface UserSettingsParentalControlsResponse {
+  maxMovieRating?: string | null;
+  maxTvRating?: string | null;
+  blockUnrated?: boolean;
+  blockAdult?: boolean;
+}
+
 export type NotificationAgentTypes = Record<NotificationAgentKey, number>;
 export interface UserSettingsNotificationsResponse {
   emailEnabled?: boolean;

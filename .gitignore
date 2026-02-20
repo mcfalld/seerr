@@ -36,6 +36,9 @@ config/db/*.sqlite3*
 config/settings.json
 config/settings.old.json
 
+# test config
+config-test/
+
 # logs
 config/logs/*.log*
 config/logs/*.json

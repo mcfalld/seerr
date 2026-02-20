@@ -9,6 +9,7 @@ import Media from '@server/entity/Media';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import { User } from '@server/entity/User';
 import { UserPushSubscription } from '@server/entity/UserPushSubscription';
+import { UserSettings } from '@server/entity/UserSettings';
 import { Watchlist } from '@server/entity/Watchlist';
 import type { WatchlistResponse } from '@server/interfaces/api/discoverInterfaces';
 import type {
@@ -437,7 +438,14 @@ export const canMakePermissionsChange = (
 router.put<
   Record<string, never>,
   Partial<User>[],
-  { ids: string[]; permissions: number }
+  {
+    ids: string[];
+    permissions: number;
+    maxMovieRating?: string | null;
+    maxTvRating?: string | null;
+    blockUnrated?: boolean;
+    blockAdult?: boolean;
+  }
 >('/', isAuthenticated(Permission.MANAGE_USERS), async (req, res, next) => {
   try {
     const isOwner = req.user?.id === 1;
@@ -461,6 +469,36 @@ router.put<
 
     const updatedUsers = await Promise.all(
       users.map(async (user) => {
+        // Update parental controls if provided
+        const hasParentalControls =
+          req.body.maxMovieRating !== undefined ||
+          req.body.maxTvRating !== undefined ||
+          req.body.blockUnrated !== undefined ||
+          req.body.blockAdult !== undefined;
+
+        if (hasParentalControls) {
+          // Skip admin users unless requester is owner
+          if (user.hasPermission(Permission.ADMIN) && req.user?.id !== 1) {
+            // Don't modify admin parental controls
+          } else {
+            if (!user.settings) {
+              user.settings = new UserSettings({ user });
+            }
+            if (req.body.maxMovieRating !== undefined) {
+              user.settings.maxMovieRating = req.body.maxMovieRating ?? null;
+            }
+            if (req.body.maxTvRating !== undefined) {
+              user.settings.maxTvRating = req.body.maxTvRating ?? null;
+            }
+            if (req.body.blockUnrated !== undefined) {
+              user.settings.blockUnrated = req.body.blockUnrated;
+            }
+            if (req.body.blockAdult !== undefined) {
+              user.settings.blockAdult = req.body.blockAdult;
+            }
+          }
+        }
+
         return userRepository.save(<User>{
           ...user,
           ...{ permissions: req.body.permissions },

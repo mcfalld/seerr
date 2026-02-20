@@ -72,6 +72,18 @@ export class UserSettings {
   @Column({ nullable: true })
   public watchlistSyncTv?: boolean;
 
+  @Column({ type: 'varchar', nullable: true })
+  public maxMovieRating?: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  public maxTvRating?: string | null;
+
+  @Column({ type: 'boolean', default: false })
+  public blockUnrated?: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  public blockAdult?: boolean;
+
   @Column({
     type: 'text',
     nullable: true,

@@ -9,6 +9,7 @@ import { UserSettings } from '@server/entity/UserSettings';
 import type {
   UserSettingsGeneralResponse,
   UserSettingsNotificationsResponse,
+  UserSettingsParentalControlsResponse,
 } from '@server/interfaces/api/userSettingsInterfaces';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
@@ -727,5 +728,96 @@ userSettingsRoutes.post<
     }
   }
 );
+
+userSettingsRoutes.get<{ id: string }, UserSettingsParentalControlsResponse>(
+  '/parental-controls',
+  isOwnProfileOrAdmin(),
+  async (req, res, next) => {
+    const userRepository = getRepository(User);
+
+    try {
+      const user = await userRepository.findOne({
+        where: { id: Number(req.params.id) },
+      });
+
+      if (!user) {
+        return next({ status: 404, message: 'User not found.' });
+      }
+
+      return res.status(200).json({
+        maxMovieRating: user.settings?.maxMovieRating ?? null,
+        maxTvRating: user.settings?.maxTvRating ?? null,
+        blockUnrated: user.settings?.blockUnrated ?? false,
+        blockAdult: user.settings?.blockAdult ?? false,
+      });
+    } catch (e) {
+      next({ status: 500, message: e.message });
+    }
+  }
+);
+
+userSettingsRoutes.post<
+  { id: string },
+  UserSettingsParentalControlsResponse,
+  UserSettingsParentalControlsResponse
+>('/parental-controls', isOwnProfileOrAdmin(), async (req, res, next) => {
+  const userRepository = getRepository(User);
+
+  try {
+    const user = await userRepository.findOne({
+      where: { id: Number(req.params.id) },
+    });
+
+    if (!user) {
+      return next({ status: 404, message: 'User not found.' });
+    }
+
+    // "Owner" user settings cannot be modified by other users
+    if (user.id === 1 && req.user?.id !== 1) {
+      return next({
+        status: 403,
+        message: "You do not have permission to modify this user's settings.",
+      });
+    }
+
+    // Admin users cannot have parental controls set by non-owner users
+    if (
+      user.hasPermission(Permission.ADMIN) &&
+      req.user?.id !== 1 &&
+      req.user?.id !== user.id
+    ) {
+      return next({
+        status: 403,
+        message: 'You cannot set parental controls on administrator accounts.',
+      });
+    }
+
+    if (!user.settings) {
+      user.settings = new UserSettings({
+        user: req.user,
+        maxMovieRating: req.body.maxMovieRating ?? null,
+        maxTvRating: req.body.maxTvRating ?? null,
+        blockUnrated: req.body.blockUnrated ?? false,
+        blockAdult: req.body.blockAdult ?? false,
+      });
+    } else {
+      user.settings.maxMovieRating = req.body.maxMovieRating ?? null;
+      user.settings.maxTvRating = req.body.maxTvRating ?? null;
+      user.settings.blockUnrated = req.body.blockUnrated ?? false;
+      user.settings.blockAdult = req.body.blockAdult ?? false;
+    }
+
+    await userRepository.save(user);
+
+    return res.status(200).json({
+      maxMovieRating: user.settings.maxMovieRating ?? null,
+      maxTvRating: user.settings.maxTvRating ?? null,
+      blockUnrated: user.settings.blockUnrated ?? false,
+      blockAdult: user.settings.blockAdult ?? false,
+    });
+  } catch (e) {
+    next({ status: 500, message: e.message });
+  }
+});
 
 export default userSettingsRoutes;

@@ -21,6 +21,7 @@ const messages = defineMessages('components.UserProfile.UserSettings', {
   menuLinkedAccounts: 'Linked Accounts',
   menuNotifications: 'Notifications',
   menuPermissions: 'Permissions',
+  menuParentalControls: 'Parental Controls',
   unauthorizedDescription:
     "You do not have permission to modify this user's settings.",
 });
@@ -84,6 +85,13 @@ const UserSettings = ({ children }: UserSettingsProps) => {
       text: intl.formatMessage(messages.menuPermissions),
       route: '/settings/permissions',
       regex: /\/settings\/permissions/,
+      requiredPermission: Permission.MANAGE_USERS,
+      hidden: currentUser?.id !== 1 && currentUser?.id === user.id,
+    },
+    {
+      text: intl.formatMessage(messages.menuParentalControls),
+      route: '/settings/parental-controls',
+      regex: /\/settings\/parental-controls/,
       requiredPermission: Permission.MANAGE_USERS,
       hidden: currentUser?.id !== 1 && currentUser?.id === user.id,
     },

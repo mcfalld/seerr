@@ -1,5 +1,11 @@
 import RadarrAPI from '@server/api/servarr/radarr';
 import SonarrAPI from '@server/api/servarr/sonarr';
+import TheMovieDb from '@server/api/themoviedb';
+import {
+  isUnrated,
+  shouldFilterMovie,
+  shouldFilterTv,
+} from '@server/constants/contentRatings';
 import {
   MediaRequestStatus,
   MediaStatus,
@@ -25,7 +31,13 @@ import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
 import { isAuthenticated } from '@server/middleware/auth';
+import {
+  getMovieCertFromDetails,
+  getUserContentRatingLimits,
+} from '@server/routes/discover';
 import { Router } from 'express';
+
+export class ContentRatingRestrictionError extends Error {}
 
 const requestRoutes = Router();
 
@@ -267,6 +279,77 @@ requestRoutes.get<Record<string, unknown>, RequestResultsResponse>(
         });
       }
 
+      // Parental controls: for REQUEST_VIEW users (who can browse but not
+      // manage), filter OTHER users' requests by the viewer's rating limits.
+      // MANAGE_REQUESTS users must see everything so they can approve/deny.
+      // The user's OWN requests are always shown regardless.
+      const limits = getUserContentRatingLimits(req.user);
+      if (
+        limits &&
+        !req.user?.hasPermission(Permission.MANAGE_REQUESTS) &&
+        req.user?.hasPermission(Permission.REQUEST_VIEW)
+      ) {
+        const tmdb = new TheMovieDb();
+        const settled = await Promise.allSettled(
+          mappedRequests.map(async (r) => {
+            // Always show user's own requests
+            if (r.requestedBy?.id === req.user?.id) return r;
+
+            if (r.type === MediaType.MOVIE) {
+              const movieDetails = await tmdb.getMovie({
+                movieId: r.media.tmdbId,
+              });
+
+              if (limits.blockAdult && movieDetails.adult) return null;
+
+              if (limits.blockUnrated || limits.maxMovieRating) {
+                const cert = getMovieCertFromDetails(
+                  movieDetails.release_dates?.results ?? []
+                );
+
+                if (limits.blockUnrated && isUnrated(cert)) return null;
+                if (
+                  limits.maxMovieRating &&
+                  cert &&
+                  shouldFilterMovie(cert, limits.maxMovieRating)
+                )
+                  return null;
+              }
+            } else if (r.type === MediaType.TV) {
+              if (limits.blockUnrated || limits.maxTvRating) {
+                const tvDetails = await tmdb.getTvShow({
+                  tvId: r.media.tmdbId,
+                });
+                const usRating = tvDetails.content_ratings?.results?.find(
+                  (cr) => cr.iso_3166_1 === 'US'
+                );
+                const cert = usRating?.rating ?? '';
+
+                if (limits.blockUnrated && isUnrated(cert)) return null;
+                if (
+                  limits.maxTvRating &&
+                  cert &&
+                  shouldFilterTv(cert, limits.maxTvRating)
+                )
+                  return null;
+              }
+            }
+            return r;
+          })
+        );
+
+        mappedRequests = settled
+          .filter(
+            (outcome) =>
+              outcome.status === 'fulfilled' && outcome.value !== null
+          )
+          .map(
+            (outcome) =>
+              (outcome as PromiseFulfilledResult<(typeof mappedRequests)[0]>)
+                .value
+          );
+      }
+
       return res.status(200).json({
         pageInfo: {
           pages: Math.ceil(requestCount / pageSize),
@@ -292,6 +375,71 @@ requestRoutes.post<never, MediaRequest, MediaRequestBody>(
           message: 'You must be logged in to request media.',
         });
       }
+
+      // Check parental controls before allowing the request
+      const limits = getUserContentRatingLimits(req.user);
+      if (limits) {
+        const tmdb = new TheMovieDb();
+
+        if (req.body.mediaType === MediaType.MOVIE) {
+          const movie = await tmdb.getMovie({ movieId: req.body.mediaId });
+
+          // Block adult movies
+          if (limits.blockAdult && movie.adult) {
+            throw new ContentRatingRestrictionError(
+              'This content is restricted by your parental control settings.'
+            );
+          }
+
+          // Check movie certification
+          if (limits.blockUnrated || limits.maxMovieRating) {
+            const cert = getMovieCertFromDetails(
+              movie.release_dates?.results ?? []
+            );
+
+            if (limits.blockUnrated && isUnrated(cert)) {
+              throw new ContentRatingRestrictionError(
+                'This content is restricted by your parental control settings (unrated content is blocked).'
+              );
+            }
+
+            if (
+              limits.maxMovieRating &&
+              cert &&
+              shouldFilterMovie(cert, limits.maxMovieRating)
+            ) {
+              throw new ContentRatingRestrictionError(
+                `This content is rated ${cert}, which exceeds your allowed rating of ${limits.maxMovieRating}.`
+              );
+            }
+          }
+        } else if (req.body.mediaType === MediaType.TV) {
+          if (limits.blockUnrated || limits.maxTvRating) {
+            const tvShow = await tmdb.getTvShow({ tvId: req.body.mediaId });
+            const usRating = tvShow.content_ratings?.results?.find(
+              (r) => r.iso_3166_1 === 'US'
+            );
+            const cert = usRating?.rating ?? '';
+
+            if (limits.blockUnrated && isUnrated(cert)) {
+              throw new ContentRatingRestrictionError(
+                'This content is restricted by your parental control settings (unrated content is blocked).'
+              );
+            }
+
+            if (
+              limits.maxTvRating &&
+              cert &&
+              shouldFilterTv(cert, limits.maxTvRating)
+            ) {
+              throw new ContentRatingRestrictionError(
+                `This content is rated ${cert}, which exceeds your allowed rating of ${limits.maxTvRating}.`
+              );
+            }
+          }
+        }
+      }
+
       const request = await MediaRequest.request(req.body, req.user);
 
       return res.status(201).json(request);
@@ -309,6 +457,8 @@ requestRoutes.post<never, MediaRequest, MediaRequestBody>(
         case NoSeasonsAvailableError:
           return next({ status: 202, message: error.message });
         case BlacklistedMediaError:
+          return next({ status: 403, message: error.message });
+        case ContentRatingRestrictionError:
           return next({ status: 403, message: error.message });
         default:
           return next({ status: 500, message: error.message });
